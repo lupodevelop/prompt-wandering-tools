@@ -1,0 +1,17 @@
+{
+  "name": "ImageVault",
+  "author": "Daniele Scaratti (aka lupodevelop)",
+  "version": "1.0.0",
+  "description": "ComfyUI output node for robust, reproducible image saving with full workflow metadata. Saves images with workflow state for complete traceability.",
+  "main": "image_vault.py",
+  "license": "MIT",
+  "homepage": "https://github.com/lupodevelop/ImageVault",
+  "keywords": [
+    "ComfyUI",
+    "output node",
+    "image saving",
+    "workflow metadata",
+    "reproducibility",
+    "traceability"
+  ]
+}

@@ -1,0 +1,13 @@
+[project]
+name = "prompt-wandering-tools"
+version = "1.0.0"
+description = "Custom nodes for ComfyUI, for creative expression."
+authors = [
+    { name="Daniele Scaratti", email="" }
+]
+dependencies = [
+    "comfyui",
+    "pillow",
+    "numpy"
+]
+requires-python = ">=3.10"
