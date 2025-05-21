@@ -1,0 +1,8 @@
+{
+  "name": "PromptMixer",
+  "author": "Daniele Scaratti (aka lupodevelop)",
+  "version": "1.0.0",
+  "description": "A creative node for blending two prompts with adjustable parameters for generative exploration in ComfyUI.",
+  "entry_point": "prompt_mixer.py",
+  "tags": ["prompt", "text", "blend", "wandering", "comfyui"]
+}
