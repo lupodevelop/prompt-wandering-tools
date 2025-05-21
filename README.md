@@ -20,7 +20,7 @@ Prompt wandering is the philosophy of giving generative models more freedom and 
   - *(More nodes coming soon!)*
 
 - **Examples:**  
-  Example workflows and usage scenarios (see the `examples/` folder).
+  Example workflows and usage scenarios (see the `examples/` folder). *(coming soon!)*
 
 ## Manual Installation
 
