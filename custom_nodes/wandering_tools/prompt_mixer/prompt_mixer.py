@@ -8,21 +8,25 @@ import random
 
 class PromptMixer:
     """
-    ComfyUI node for blending two prompts with adjustable parameters.
-    Allows creative prompt mixing for generative exploration.
+    A ComfyUI node that blends two Conditioning inputs (main_clip and secondary_clip)
+    by extracting their underlying text, mixing them, and re-encoding them into a single
+    Conditioning output. Includes multiple blend modes, a random seed for reproducibility,
+    and an 'overwrite' feature that reuses the previous mix if the inputs haven't changed.
     """
 
     # To support "overwrite=False" logic, we store previous inputs and output.
-    # Note: This relies on the node instance being persistent between executions.
+    # (Node instance must persist between executions.)
     _last_inputs = None
     _last_mixed_prompt = None
+    _last_conditioning = None
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "main_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "secondary_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "clip": ("CLIP", {}),
+                "main_clip": ("CONDITIONING", {}),
+                "secondary_clip": ("CONDITIONING", {}),
                 "blend_percent": ("FLOAT", {"default": 50.0, "min": 0.0, "max": 100.0, "step": 1.0}),
                 "mode": (["append", "interpolate", "shuffle", "replace", "random_insert"],),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 2**32-1}),
@@ -31,8 +35,10 @@ class PromptMixer:
             }
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("mixed_prompt",)
+    # We want to output a single Conditioning object that can be passed to other nodes (KSampler, etc.)
+    RETURN_TYPES = ("CONDITIONING",)
+    RETURN_NAMES = ("CONDITIONING",)
+    OUTPUT_NODE = True  # opzionale, se vuoi che sia nodo di output
     FUNCTION = "mix"
     CATEGORY = "🎲 wandering_tools"
 
@@ -40,58 +46,73 @@ class PromptMixer:
     def IS_PREVIEW(cls):
         return True
 
-    def mix(self, main_prompt, secondary_prompt, blend_percent, mode, seed, max_length, overwrite):
+    def _extract_prompt_text(self, conditioning):
         """
-        Mixes the two prompts according to the selected mode and blend percent.
-        If overwrite=False, it reuses a previously mixed prompt if the inputs haven't changed.
-        Adds new modes ('replace', 'random_insert'),
-        and truncates the final prompt with an ellipsis if it exceeds max_length.
+        Attempt to extract the original text from a Conditioning object.
+        If not found, returns an empty string.
+        """
+        if not conditioning or not isinstance(conditioning, dict):
+            return ""
+        # In ComfyUI, CLIP-based conditioning typically stores text under "text"
+        return conditioning.get("text", "")
+
+    def mix(self, clip, main_clip, secondary_clip, blend_percent, mode, seed, max_length, overwrite):
+        """
+        Mixes two Conditioning objects by:
+          1) Extracting their text
+          2) Blending them according to mode & blend_percent
+          3) Truncating & adding an ellipsis if too long
+          4) Re-encoding into a single Conditioning (using the default CLIP model)
+          5) If overwrite=False, and inputs haven't changed, reuse the previous result
         """
 
-        # Check if we should skip recalculation
+        # Extract text from incoming Conditionings
+        main_prompt = self._extract_prompt_text(main_clip)
+        secondary_prompt = self._extract_prompt_text(secondary_clip)
+
+        # Prepare a tuple to detect if inputs changed
         current_inputs = (
             main_prompt, secondary_prompt, blend_percent,
             mode, seed, max_length
         )
 
+        # If overwrite=False and inputs haven't changed, return previous result
         if (not overwrite
             and self._last_inputs is not None
             and self._last_inputs == current_inputs
-            and self._last_mixed_prompt is not None):
-            # Reuse previous result
-            return (self._last_mixed_prompt,)
+            and self._last_conditioning is not None):
+            return (self._last_conditioning,)
 
-        # Store inputs
+        # Store current inputs
         self._last_inputs = current_inputs
 
-        # If both prompts are empty, return empty
+        # If both prompts are empty, short-circuit
         if not main_prompt.strip() and not secondary_prompt.strip():
-            mixed_prompt = "(empty prompt)"
-            self._last_mixed_prompt = mixed_prompt
-            return (mixed_prompt,)
+            final_text = "(empty prompt)"
+            # Re-encode an empty prompt so that we still return a valid Conditioning
+            clip_model = load_model("CLIP")
+            empty_cond = clip_model.encode(final_text)
+            empty_cond["text"] = final_text
+            self._last_mixed_prompt = final_text
+            self._last_conditioning = empty_cond
+            return (empty_cond,)
 
         # Deterministic randomness
         random.seed(seed)
 
-        # Tokenize prompts
+        # Split text into tokens
         main_tokens = main_prompt.strip().split()
         secondary_tokens = secondary_prompt.strip().split()
 
-        # Calculate number of tokens to blend
+        # Compute how many tokens from secondary to blend
         blend_count = int(len(secondary_tokens) * (blend_percent / 100.0))
+        blend_count = max(0, min(blend_count, len(secondary_tokens)))
 
-        # Handle negative or out-of-range blend_count
-        if blend_count < 0:
-            blend_count = 0
-        elif blend_count > len(secondary_tokens):
-            blend_count = len(secondary_tokens)
-
+        # Perform blending based on mode
         if mode == "append":
-            # Append blend_count tokens from secondary to main
             mixed_tokens = main_tokens + secondary_tokens[:blend_count]
 
         elif mode == "interpolate":
-            # Interleave tokens from both prompts
             mixed_tokens = []
             i, j = 0, 0
             while i < len(main_tokens) or j < blend_count:
@@ -103,12 +124,10 @@ class PromptMixer:
                     j += 1
 
         elif mode == "shuffle":
-            # Mix blend_count tokens from secondary into main, then shuffle
             mixed_tokens = main_tokens + secondary_tokens[:blend_count]
             random.shuffle(mixed_tokens)
 
         elif mode == "replace":
-            # Replace up to blend_count tokens of main with tokens from secondary
             mixed_tokens = main_tokens[:]
             replace_indices = list(range(len(mixed_tokens)))
             random.shuffle(replace_indices)
@@ -117,29 +136,42 @@ class PromptMixer:
                 mixed_tokens[idx] = sec_token
 
         elif mode == "random_insert":
-            # Randomly insert up to blend_count tokens from secondary into main
             mixed_tokens = main_tokens[:]
             for sec_token in secondary_tokens[:blend_count]:
                 insert_pos = random.randint(0, len(mixed_tokens))
                 mixed_tokens.insert(insert_pos, sec_token)
 
         else:
-            # Fallback: just main prompt
+            # Fallback: no mixing, just main tokens
             mixed_tokens = main_tokens
 
-        # Join tokens
-        mixed_prompt = " ".join(mixed_tokens)
+        # Join tokens into final text
+        final_text = " ".join(mixed_tokens)
 
-        # Truncate to max_length (by characters), adding ellipsis if needed
-        if len(mixed_prompt) > max_length:
-            truncated = mixed_prompt[:max_length - 3].rstrip()
-            mixed_prompt = truncated + "..."
+        # Truncate if exceeding max_length (characters) & add ellipsis
+        if len(final_text) > max_length:
+            truncated = final_text[:max_length - 3].rstrip()
+            final_text = truncated + "..."
 
-        # Save result to reuse if overwrite=False
-        self._last_mixed_prompt = mixed_prompt
-        return (mixed_prompt,)
+        # Encode the mixed text into a new Conditioning
+        final_cond = clip.encode(final_text)
+        final_cond["text"] = final_text
+
+        # Cache results for potential reuse
+        self._last_mixed_prompt = final_text
+        self._last_conditioning = final_cond
+
+        # Restituisci anche la preview
+        return (final_cond, {"preview": final_text})
 
     @classmethod
     def PREVIEW(cls, inputs, output):
-        # Show the mixed prompt in a box in the node
-        return output[0] if output and output[0] else "(no preview)"
+        """
+        Show the mixed prompt in a box in the node preview.
+        'output' is a tuple with one Conditioning dict. We'll extract its text.
+        """
+        if isinstance(output, tuple) and len(output) > 1 and isinstance(output[1], dict):
+            return output[1].get("preview", "(no preview)")
+        if output and isinstance(output[0], dict):
+            return output[0].get("text", "(no text)")
+        return "(no preview)"
